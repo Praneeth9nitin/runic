@@ -1,0 +1,1 @@
+pub fn set_namespace() -> anyhow::Result<()> {}
