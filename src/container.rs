@@ -1,4 +1,8 @@
-use std::process::{Child, Command};
+use crate::namespace::set_namespace;
+use std::{
+    os::unix::process::CommandExt,
+    process::{Child, Command},
+};
 
 pub enum ContainerState {
     Created,
@@ -21,7 +25,14 @@ impl Container {
         }
     }
     pub fn run(&mut self, program: &str) -> anyhow::Result<()> {
-        let child = Command::new(program).spawn()?;
+        let child = unsafe {
+            Command::new(program)
+                .pre_exec(|| {
+                    set_namespace()
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                })
+                .spawn()
+        }?;
         let pid = child.id();
 
         self.child = Some(child);

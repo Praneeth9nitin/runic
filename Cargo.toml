@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.102"
-nix = "0.31.3"
+nix = { version = "0.31.3", features = ["process", "hostname", "sched"] }
 rand = "0.8.5"
