@@ -1,4 +1,5 @@
 use crate::namespace::set_namespace;
+use crate::filesystem::set_filesystem;
 use std::{
     os::unix::process::CommandExt,
     process::{Child, Command},
@@ -25,11 +26,15 @@ impl Container {
         }
     }
     pub fn run(&mut self, program: &str) -> anyhow::Result<()> {
+        let id = self.id.clone();
         let child = unsafe {
             Command::new(program)
-                .pre_exec(|| {
+                .pre_exec(move || {
                     set_namespace()
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                    set_filesystem(&id)
+                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                    Ok(())
                 })
                 .spawn()
         }?;
