@@ -1,5 +1,6 @@
 use crate::namespace::set_namespace;
 use crate::filesystem::set_filesystem;
+use crate::newcgroup::{set_cgroup, add_to_cgroup};
 use std::{
     os::unix::process::CommandExt,
     process::{Child, Command},
@@ -27,6 +28,8 @@ impl Container {
     }
     pub fn run(&mut self, program: &str) -> anyhow::Result<()> {
         let id = self.id.clone();
+        set_cgroup(&self.id)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
         let child = unsafe {
             Command::new(program)
                 .pre_exec(move || {
@@ -39,6 +42,7 @@ impl Container {
                 .spawn()
         }?;
         let pid = child.id();
+        add_to_cgroup(&self.id, pid)?;
 
         self.child = Some(child);
         self.state = ContainerState::Running { pid };
