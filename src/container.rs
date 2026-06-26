@@ -28,21 +28,21 @@ impl Container {
     }
     pub fn run(&mut self, program: &str) -> anyhow::Result<()> {
         let id = self.id.clone();
-        set_cgroup(&self.id)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        set_cgroup(&self.id)?;
         let child = unsafe {
             Command::new(program)
-                .pre_exec(move || {
-                    set_namespace()
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-                    set_filesystem(&id)
-                        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-                    Ok(())
+            .pre_exec(move || {
+                add_to_cgroup(&self.id, std::process::id())
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                set_namespace()
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                set_filesystem(&id)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                Ok(())
                 })
                 .spawn()
         }?;
         let pid = child.id();
-        add_to_cgroup(&self.id, pid)?;
 
         self.child = Some(child);
         self.state = ContainerState::Running { pid };
