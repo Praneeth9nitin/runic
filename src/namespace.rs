@@ -6,7 +6,7 @@ pub fn set_namespace() -> anyhow::Result<()> {
     unshare(CloneFlags::CLONE_NEWUTS)?;
     unshare(CloneFlags::CLONE_NEWNS)?;
     sethostname("runic-container")?;
-    unshare(CloneFlags::CLONE_NEWPID)?;
+    // unshare(CloneFlags::CLONE_NEWPID)?;
     println!("namespaces done");
     Ok(())
 }

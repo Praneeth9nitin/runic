@@ -2,7 +2,7 @@ use nix::mount::{mount, MsFlags, umount2, MntFlags};
 use std::fs::create_dir_all;
 use nix::unistd::pivot_root;
 
-pub fn set_filesystem(container_id: &str) -> anyhow::Result<()>{
+pub fn set_filesystem(container_id: &str, rootfs_path: &str) -> anyhow::Result<()>{
     if !std::path::Path::new("/tmp/runic/base/bin").exists() {
         std::fs::create_dir_all("/tmp/runic/base")?;
         std::process::Command::new("cp")
@@ -17,7 +17,7 @@ pub fn set_filesystem(container_id: &str) -> anyhow::Result<()>{
     let target = format!("/tmp/runic/{}/merged",container_id);
     let old_root = format!("/tmp/runic/{}/merged/oldroot", container_id);
     
-    let options = format!("lowerdir=/tmp/runic/base,upperdir=/tmp/runic/{}/upper,workdir=/tmp/runic/{}/work", container_id, container_id);
+    let options = format!("lowerdir={},upperdir=/tmp/runic/{}/upper,workdir=/tmp/runic/{}/work", rootfs_path, container_id, container_id);
     println!("options: {}", options);
     mount(Some("overlay"), target.as_str(), Some("overlay"), MsFlags::empty(), Some(options.as_str()))?;
     println!("mount 1 done");
