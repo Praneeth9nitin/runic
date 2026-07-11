@@ -15,7 +15,6 @@ pub fn set_filesystem(container_id: &str, rootfs_path: &str) -> anyhow::Result<(
     create_dir_all(format!("/tmp/runic/{}/work", container_id))?;
     create_dir_all(format!("/tmp/runic/{}/merged", container_id))?;
     let target = format!("/tmp/runic/{}/merged",container_id);
-    let old_root = format!("/tmp/runic/{}/merged/oldroot", container_id);
     
     let options = format!("lowerdir={},upperdir=/tmp/runic/{}/upper,workdir=/tmp/runic/{}/work", rootfs_path, container_id, container_id);
     println!("options: {}", options);
@@ -32,6 +31,7 @@ pub fn set_filesystem(container_id: &str, rootfs_path: &str) -> anyhow::Result<(
     umount2("/oldroot", MntFlags::MNT_DETACH)?;
     println!("Unmount done");
     mount(Some("proc"), "/proc", Some("proc"), MsFlags::empty(), None::<&str>)?;
+    mount(Some("devtmpfs"), "/dev", Some("devtmpfs"), MsFlags::empty(), None::<&str>)?;
     println!("mount 2 done");
     Ok(())
 }

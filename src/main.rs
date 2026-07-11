@@ -3,6 +3,7 @@ mod filesystem;
 mod namespace;
 mod newcgroup;
 mod image;
+mod network;
 use std::env;
 #[tokio::main]
 async fn main() {
@@ -11,9 +12,8 @@ async fn main() {
     let act_img = format!("library/{}",image_to_pull[0]);
     let rootfs_path = image::pull(&act_img, &image_to_pull[1]).await.unwrap();
     let mut c = container::Container::new("cont1".to_string());
-    if let Err(e) = c.run(&args[2], rootfs_path) {
-        eprintln!("error: {:#}", e);  // #  shows full error chain
-        std::process::exit(1);
+    if let Err(e) = c.run(&args[2], rootfs_path).await{
+        eprintln!("error: {:#}", e);
     }
     
     if let Err(e) = c.wait() {
