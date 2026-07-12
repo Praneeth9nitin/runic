@@ -59,6 +59,7 @@ When you run `runic ubuntu:22.04 /bin/bash`, here's what happens:
    container to reach the internet through the host's IP.
 
 ## Architecture
+```
 runic/
 ├── src/
 │   ├── main.rs        — CLI entry point
@@ -68,6 +69,7 @@ runic/
 │   ├── cgroup.rs      — resource limits
 │   ├── image.rs       — OCI image pulling
 │   └── network.rs     — veth, bridge, NAT
+```
 
 ## What's coming
 
