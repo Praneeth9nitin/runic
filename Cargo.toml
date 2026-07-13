@@ -1,3 +1,10 @@
+[[bin]]
+name = "runic"
+path = "src/bin/runic.rs"
+[[bin]]
+name = "runicd"
+path = "src/bin/runicd.rs"
+
 [package]
 name = "runic"
 version = "0.1.0"
@@ -15,3 +22,5 @@ sha2 = "0.10"
 hex = "0.4"
 tar = "0.4"
 flate2 = "1"
+clap = { version = "4.6.1", features = ["derive"] }
+uuid = { version = "1.23.5", features = ["serde", "v4"] }
