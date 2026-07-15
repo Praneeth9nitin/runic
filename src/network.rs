@@ -103,7 +103,7 @@ pub async fn connect_bridge_to_veth(container_id: &str) -> anyhow::Result<()>{
 }
 
 
-pub async fn add_container(container_id: &str, child_pid: u32) -> anyhow::Result<()>{
+pub async fn add_container(container_id: &str, child_pid: i32) -> anyhow::Result<()>{
     let veth2 = format!("veth1_{}", container_id);
     let out = std::process::Command::new("sudo")
         .args(["ip", "link", "set", &veth2, "netns", &child_pid.to_string()])
@@ -118,7 +118,7 @@ pub async fn add_container(container_id: &str, child_pid: u32) -> anyhow::Result
     Ok(())
 }
 
-pub async fn container_network_configuration(container_id: &str, child_pid: u32) -> anyhow::Result<()>{
+pub async fn container_network_configuration(container_id: &str, child_pid: i32) -> anyhow::Result<()>{
     let veth2 = format!("veth1_{}", container_id);
     let pid_str = child_pid.to_string();
     let out = std::process::Command::new("nsenter")
@@ -127,6 +127,7 @@ pub async fn container_network_configuration(container_id: &str, child_pid: u32)
 
     if !out.status.success() {
         let error = String::from_utf8_lossy(&out.stderr).to_string();
+        println!("{}",error);
         return Err(anyhow::anyhow!(error));
     }
 
@@ -163,21 +164,23 @@ pub fn setup_nat() -> anyhow::Result<()> {
         .args(["/proc/sys/net/ipv4/ip_forward"])
         .output()?;
 
-    if check.status.success(){
-        println!("ip_4 already forwarded");
-        return Ok(());
-    }
-    
-    let out = std::process::Command::new("sysctl")
-        .args(["-w", "net.ipv4.ip_forward=1"])
-        .output()?;
-    if !out.status.success() {
-        let error = String::from_utf8_lossy(&out.stderr).to_string();
-        return Err(anyhow::anyhow!(error));
+    let value = String::from_utf8_lossy(&check.stdout).trim().to_string();
+
+    if value != "1" {
+        let out = std::process::Command::new("sysctl")
+            .args(["-w", "net.ipv4.ip_forward=1"])
+            .output()?;
+        if !out.status.success() {
+            let error = String::from_utf8_lossy(&out.stderr).to_string();
+            return Err(anyhow::anyhow!(error));
+        }
+        println!("ip_forward enabled");
+    } else {
+        println!("ip_forward already enabled");
     }
 
     let check: std::process::Output = std::process::Command::new("iptables")
-        .args(["-t", "nat", "-C", "POSTROUTING", "-s", "10.0.0.2/24", "-j", "MASQUERADE"])
+        .args(["-t", "nat", "-C", "POSTROUTING", "-s", "10.0.0.0/24", "-j", "MASQUERADE"])
         .output()?;
 
     if check.status.success(){

@@ -2,6 +2,8 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize)]
 pub enum Command {
+    Create { image: String, tag: String},
+    Start { cont_id: String, program: String},
     Run { image: String, tag: String, program: String },
     Stop { container_id: String },
     Ps,

@@ -9,7 +9,7 @@ pub fn set_cgroup(container_id: &str) -> anyhow::Result<()>{
     Ok(())
 }
 
-pub fn add_to_cgroup(container_id: &str, pid: u32) -> anyhow::Result<()> {
+pub fn add_to_cgroup(container_id: &str, pid: i32) -> anyhow::Result<()> {
     std::fs::write(format!("/sys/fs/cgroup/{}/cgroup.procs", container_id), pid.to_string())?;
     println!("pid {} added to cgroup", pid);
     Ok(())

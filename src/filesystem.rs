@@ -31,6 +31,7 @@ pub fn set_filesystem(container_id: &str, rootfs_path: &str) -> anyhow::Result<(
     umount2("/oldroot", MntFlags::MNT_DETACH)?;
     println!("Unmount done");
     mount(Some("proc"), "/proc", Some("proc"), MsFlags::empty(), None::<&str>)?;
+    std::fs::write("/etc/resolv.conf", "nameserver 8.8.8.8\nnameserver 8.8.4.4\n")?;
     mount(Some("devtmpfs"), "/dev", Some("devtmpfs"), MsFlags::empty(), None::<&str>)?;
     println!("mount 2 done");
     Ok(())

@@ -5,3 +5,4 @@ pub mod container;
 pub mod namespace;
 pub mod network;
 pub mod filesystem;
+pub mod newcgroup;

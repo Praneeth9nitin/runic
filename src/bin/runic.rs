@@ -1,5 +1,5 @@
 use tokio::net::UnixStream;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt};
 use clap:: {Parser, Subcommand};
 use runic::proto::{Command, Response};
 
@@ -7,13 +7,20 @@ use runic::proto::{Command, Response};
 #[command(name = "runic")]
 
 struct Cli{
-    #[command[subcommand]]
+    #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Debug, Subcommand)]
 
 enum Commands{
+    Create{
+        image : String,
+    },
+    Start{
+        cont_id : String,
+        program : String
+    },
     Run{
         image : String,
         program : String
@@ -31,24 +38,51 @@ enum Commands{
     }
 }
 #[tokio::main]
-async fn main(){
+async fn main()-> anyhow::Result<()>{
     let args = Cli::parse();
 
     let socket_path = format!("/tmp/runic.sock");
-    let mut stream = UnixStream::connect(socket_path);
+    let mut stream = UnixStream::connect(socket_path).await?;
     
     match args.command {
-        Commands::Run{image, program} =>{
-            let image_vec: &Vec<&str>  = &image.trim().split(":").collect();
-            let image_name = format!("library/{}",image_vec[0]);
-            let req = Command::Run{image:image_name, tag: image_vec[1].to_string(), program};
+        Commands::Create { image } => {
+           let parts : Vec<&str> = image.trim().split(":").collect();
+           let image_name = format!("library/{}", parts[0]);
+           let tag = parts.get(1).unwrap_or(&"latest").to_string();
+           let req = Command::Create { image:image_name, tag };
+           let mut json_payload = serde_json::to_string(&req)?;
+           json_payload.push('\n');
+
+           let (_, mut writer) = stream.split();
+           writer.write_all(json_payload.as_bytes()).await?;
+           writer.flush().await?;
+        }
+        Commands::Start { cont_id, program } =>{
+            let (_ , mut writer) = stream.split();
+            let req = Command::Start { cont_id, program };
             let mut json_payload = serde_json::to_string(&req)?;
             json_payload.push('\n');
+            writer.write_all(json_payload.as_bytes()).await?;
+            writer.flush().await?;
+        }
+        Commands::Run{image, program} =>{
+           let parts : Vec<&str> = image.trim().split(":").collect();
+           let image_name = format!("library/{}", parts[0]);
+           let tag = parts.get(1).unwrap_or(&"latest").to_string();
+           let req = Command::Run {
+            image:image_name,
+            tag:tag,
+            program:program,
+           };
 
-            let (reader, mut writer) = stream.split();
-            writer.write_all(json_payload.as_bytes())?;
-            writer.flush()?;
+           let mut json_payload = serde_json::to_string(&req)?;
+           json_payload.push('\n');
+
+           let (_ , mut writer) = stream.split();
+           writer.write_all(json_payload.as_bytes()).await?;
+           writer.flush().await?;
         },
         _ => {println!("work in progress");}
-    }
+    };
+    Ok(())
 }
