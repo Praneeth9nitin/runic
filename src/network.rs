@@ -74,7 +74,7 @@ pub async fn establish_connection(container_id: &str) -> anyhow::Result<()>{
         return Err(anyhow::anyhow!("line 50 {}", error));
     }
 
-    println!("ethernet cable created");
+    println!("creating veth pair: {} <-> {}", veth1, veth2);
     Ok(())
 }
 pub async fn connect_bridge_to_veth(container_id: &str) -> anyhow::Result<()>{
@@ -105,9 +105,23 @@ pub async fn connect_bridge_to_veth(container_id: &str) -> anyhow::Result<()>{
 
 pub async fn add_container(container_id: &str, child_pid: i32) -> anyhow::Result<()>{
     let veth2 = format!("veth1_{}", container_id);
-    let out = std::process::Command::new("sudo")
-        .args(["ip", "link", "set", &veth2, "netns", &child_pid.to_string()])
+
+    std::process::Command::new("sudo")
+    .args(["nsenter", "--target", &child_pid.to_string(), "--net",
+           "ip", "link", "set", "lo", "up"])
+    .output()?;
+
+    std::process::Command::new("sudo")
+    .args(["nsenter", "--target", &child_pid.to_string(), "--net",
+           "ip", "route", "add", "default", "via", "10.0.0.1"])
+    .output()?;
+
+    let out = std::process::Command::new("ip")
+        .args(["link", "set", &veth2, "netns", &child_pid.to_string()])
         .output()?;
+    println!("stdout: {}", String::from_utf8_lossy(&out.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&out.stderr));
+    println!("status: {}", out.status);
 
     if !out.status.success() {
         let error = String::from_utf8_lossy(&out.stderr).to_string();
@@ -121,8 +135,13 @@ pub async fn add_container(container_id: &str, child_pid: i32) -> anyhow::Result
 pub async fn container_network_configuration(container_id: &str, child_pid: i32) -> anyhow::Result<()>{
     let veth2 = format!("veth1_{}", container_id);
     let pid_str = child_pid.to_string();
-    let out = std::process::Command::new("nsenter")
-        .args(["--target", &pid_str, "--net", "ip", "addr", "add", "10.0.0.2/24", "dev", &veth2])
+
+    std::process::Command::new("sudo")
+    .args(["nsenter" ,"--target", &pid_str, "--net", "ip", "addr", "flush", "dev", &veth2])
+    .output()?;
+
+    let out = std::process::Command::new("sudo")
+        .args(["nsenter", "--target", &pid_str, "--net", "ip", "addr", "add", "10.0.0.2/24", "dev", &veth2])
         .output()?;
 
     if !out.status.success() {
@@ -133,8 +152,8 @@ pub async fn container_network_configuration(container_id: &str, child_pid: i32)
 
     println!("network set for child for pid {}", child_pid);
 
-    let out = std::process::Command::new("nsenter")
-        .args(["--target", &pid_str, "--net",
+    let out = std::process::Command::new("sudo")
+        .args(["nsenter", "--target", &pid_str, "--net",
                "ip", "link", "set", &veth2, "up"])
         .output()?;
 
@@ -144,17 +163,6 @@ pub async fn container_network_configuration(container_id: &str, child_pid: i32)
     }
 
     println!("child ethernet is up for pid {}", child_pid);
-    let out = std::process::Command::new("nsenter")
-        .args(["--target", &pid_str, "--net",
-               "ip", "route", "add", "default", "via", "10.0.0.1"])
-        .output()?;
-
-    if !out.status.success() {
-        let error = String::from_utf8_lossy(&out.stderr).to_string();
-        return Err(anyhow::anyhow!(error));
-    }
-
-    println!("default neteork for {}", child_pid);
 
     Ok(())
 }
@@ -180,7 +188,7 @@ pub fn setup_nat() -> anyhow::Result<()> {
     }
 
     let check: std::process::Output = std::process::Command::new("iptables")
-        .args(["-t", "nat", "-C", "POSTROUTING", "-s", "10.0.0.0/24", "-j", "MASQUERADE"])
+        .args(["-t", "nat", "-C", "POSTROUTING", "-s", "10.0.0.0/24", "!", "-o", "runic0", "-j", "MASQUERADE"])
         .output()?;
 
     if check.status.success(){

@@ -30,18 +30,22 @@ impl Container {
     }
     pub async fn run(&mut self, program: &str, rootfs_path: String) -> anyhow::Result<()> {
         let (read_fd, write_fd) = pipe()?;
+        let (read_fd_1, write_fd_1) = pipe()?;
         let id = self.id.clone();
         let rootfs = rootfs_path.clone();
 
         match unsafe{fork()} {
             Ok(ForkResult::Parent { child })=>{
+                close(read_fd)?;
+                close(write_fd_1)?;
                 set_cgroup(&self.id)?;
-                println!("{}",child);
                 set_network(&self.id).await?;
-                add_container(&self.id, child.as_raw()).await.expect("msg");
-                container_network_configuration(&self.id, child.as_raw()).await.expect("msg");
                 add_to_cgroup(&self.id, child.as_raw())?;
                 close(write_fd)?;
+                let mut buffer = [0u8; 32];
+                read(read_fd_1, &mut buffer)?;
+                add_container(&self.id, child.as_raw()).await.expect("msg");
+                container_network_configuration(&self.id, child.as_raw()).await.expect("msg");
                 self.state = ContainerState::Running { pid: child.as_raw() as u32 };
     
                 nix::sys::wait::waitpid(child, None)?;
@@ -58,6 +62,7 @@ impl Container {
             }
             Ok(ForkResult::Child) => {
                 close(write_fd)?;
+                close(read_fd_1)?;
                 let mut buffer = [0u8; 32];
                 read(read_fd, &mut buffer)?;
                 set_namespace()?;
@@ -69,6 +74,7 @@ impl Container {
                     CString::new("HOME=/root").unwrap(),
                     CString::new("TERM=xterm").unwrap(),
                 ];
+                close(write_fd_1)?;
                 execve(&path, &args, &env)?;
             }
             Err(_) => {println!("fork failed")}
