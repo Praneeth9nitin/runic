@@ -4,6 +4,7 @@ use serde::{Serialize, Deserialize};
 pub enum Command {
     Create { image: String, tag: String},
     Start { cont_id: String, program: String},
+    Exec { cont_id: String, command: String, interactive: bool},
     Run { image: String, tag: String, program: String },
     Stop { container_id: String },
     Ps,
@@ -18,6 +19,10 @@ pub enum Response {
     ContainerList { containers: Vec<ContainerInfo> },
     ImageList { images: Vec<ImageInfo> },
     Error { message: String },
+    ExecOutput{
+        stdout:String,
+        stderr:String
+    }
 }
 
 #[derive(Serialize, Deserialize)]

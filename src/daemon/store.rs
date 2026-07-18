@@ -9,15 +9,3 @@ pub struct ContainerConfig {
     pub state:ContainerState,
     pub rootfs: String
 }
-
-impl ContainerConfig {
-    pub fn new(id: String, image: String, tag: String, state: ContainerState, rootfs: String) -> Self{
-        ContainerConfig{
-            id,
-            image,
-            tag,
-            state,
-            rootfs
-        }
-    }
-}

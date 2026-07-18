@@ -60,10 +60,20 @@ pub async fn establish_connection(container_id: &str) -> anyhow::Result<()>{
     let check = std::process::Command::new("ip")
         .args(["link", "show", &veth1])
         .output()?;
+    let check2 = std::process::Command::new("ip")
+        .args(["link", "show", &veth2])
+        .output()?;
 
-    if check.status.success(){
-        println!("veth already exist");
-        return Ok(());
+    if check.status.success() {
+        let out = std::process::Command::new("sudo")
+        .args(["ip", "link", "delete", &veth1])
+        .output()?;
+    }
+
+    if check2.status.success(){
+        let out = std::process::Command::new("sudo")
+        .args(["ip", "link", "delete", &veth2])
+        .output()?;
     }
     let out = std::process::Command::new("sudo")
         .args(["ip", "link", "add", &veth1, "type", "veth", "peer", "name", &veth2])
@@ -105,16 +115,13 @@ pub async fn connect_bridge_to_veth(container_id: &str) -> anyhow::Result<()>{
 
 pub async fn add_container(container_id: &str, child_pid: i32) -> anyhow::Result<()>{
     let veth2 = format!("veth1_{}", container_id);
-
-    std::process::Command::new("sudo")
+    let out = std::process::Command::new("sudo")
     .args(["nsenter", "--target", &child_pid.to_string(), "--net",
            "ip", "link", "set", "lo", "up"])
     .output()?;
-
-    std::process::Command::new("sudo")
-    .args(["nsenter", "--target", &child_pid.to_string(), "--net",
-           "ip", "route", "add", "default", "via", "10.0.0.1"])
-    .output()?;
+     println!("stdout: {}", String::from_utf8_lossy(&out.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&out.stderr));
+    println!("status: {}", out.status);
 
     let out = std::process::Command::new("ip")
         .args(["link", "set", &veth2, "netns", &child_pid.to_string()])
@@ -161,6 +168,14 @@ pub async fn container_network_configuration(container_id: &str, child_pid: i32)
         let error = String::from_utf8_lossy(&out.stderr).to_string();
         return Err(anyhow::anyhow!(error));
     }
+
+     let out = std::process::Command::new("sudo")
+    .args(["nsenter", "--target", &child_pid.to_string(), "--net",
+           "ip", "route", "add", "default", "via", "10.0.0.1"])
+    .output()?;
+    println!("stdout: {}", String::from_utf8_lossy(&out.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&out.stderr));
+    println!("status: {}", out.status);
 
     println!("child ethernet is up for pid {}", child_pid);
 
