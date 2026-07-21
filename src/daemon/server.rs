@@ -9,6 +9,32 @@ use crate::container::{
 };
 use crate::daemon::store::ContainerConfig;
 use crate::proto::{Command, Response};
+use std::os::unix::io::BorrowedFd;
+
+pub fn get_file(cont_id:&str)->String{
+    format!("/tmp/runic/{}/config.json",cont_id)
+}
+
+pub async fn read_file(cont_id:&str)->anyhow::Result<String>{
+    let file = File::open(get_file(&cont_id)).await.expect("file not found");
+    let mut string_reader = BufReader::new(file);
+    let mut content = String::new();
+    string_reader.read_to_string(&mut content).await?;
+    Ok(content)
+}
+
+pub async fn end(pid: String) -> anyhow::Result<()>{
+    let veth = format!("veth0_{}", pid);
+    std::process::Command::new("ip")
+        .args(["link", "delete", &veth])
+        .output().ok();
+    let merged = format!("/tmp/runic/{}/merged", pid);
+    std::process::Command::new("umount")
+        .args(["-l", &merged])
+        .output().ok();
+    std::fs::remove_dir_all(format!("/tmp/runic/{}", pid)).ok();
+    Ok(())
+}
 
 pub async fn start() -> anyhow::Result<()> {
     let socket_path = "/tmp/runic.sock";
@@ -25,7 +51,7 @@ pub async fn start() -> anyhow::Result<()> {
 }
 
 async fn handle_connection(mut stream: UnixStream)->anyhow::Result<()>{
-    let (reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = stream.into_split();
     let mut buffered_reader = BufReader::new(reader);
     let mut line = String::new();
 
@@ -37,29 +63,27 @@ async fn handle_connection(mut stream: UnixStream)->anyhow::Result<()>{
                 let rootfs_path = crate::image::pull(&image, &tag).await.unwrap();
                 let id = format!("{}",Uuid::new_v4())[..8].to_string();
                 let cont_data = ContainerConfig{id:id, image:image, tag:tag, state:Created, rootfs:rootfs_path};
-                let file_path = format!("/tmp/runic/{}",cont_data.id);
+                let file_path = format!("/tmp/runic/{}/",cont_data.id);
                 std::fs::create_dir(&file_path)?;
                 let write_file = File::create(format!("{}/config.json",&file_path)).await?;
                 let mut writer = BufWriter::new(write_file);
                 let json_string = serde_json::to_string_pretty(&cont_data)?;
                 writer.write_all(json_string.as_bytes()).await?;
                 writer.flush().await?;
+                let send_data = format!("container id {}", cont_data.id);
+                let res = Response::Ok { message:send_data};
+                let mut json_data = serde_json::to_string(&res)?;
+                json_data.push('\n');
+                writer.write_all(json_data.as_bytes()).await?;
+                writer.flush().await?;
             }
             Command::Start { cont_id, program } =>{
-                let pty = nix::pty::openpty(None, None)?;
-                let file = File::open(format!("/tmp/runic/{}/config.json", cont_id)).await.expect("file not found");
-                let mut reader = BufReader::new(file);
-                let mut content = String::new();
-                reader.read_to_string(&mut content).await?;
+                let content = read_file(&cont_id).await.unwrap();
                 let data:ContainerConfig = serde_json::from_str(&content)?;
                 let mut c = crate::container::Container::new(data.id);
-                Container::run(&mut c, &program, data.rootfs, pty.slave).await?;  
             }
             Command::Exec { cont_id, command, interactive } =>{
-                println!("Im inside exec");
-                let mut file = File::open(format!("/tmp/runic/{}/config.json", cont_id)).await.expect("file not found");
-                let mut content = String::new();
-                file.read_to_string(&mut content).await?;
+                let content = read_file(&cont_id).await.unwrap();
                 let data:ContainerConfig = serde_json::from_str(&content)?;
                 println!("{}", &content);
                 let pid = match data.state {
@@ -83,20 +107,53 @@ async fn handle_connection(mut stream: UnixStream)->anyhow::Result<()>{
                 json_data.push('\n');
                 writer.write_all(json_data.as_bytes()).await?;
                 writer.flush().await?;
+                nix::sys::wait::waitpid( nix::unistd::Pid::from_raw(pid as i32), None)?;
+                
             }
-            // Command::Run{image  , tag, program} =>{
-            //     let rootfs_path = crate::image::pull(&image, &tag).await.unwrap();
-            //     let mut c = crate::container::Container::new(format!("{}",Uuid::new_v4())[..8].to_string());
-            //     if let Err(e) = c.run(&program, rootfs_path).await{
-            //         eprintln!("error: {:#}", e);
-            //     }
-            //     if let Err(e) = c.wait() {
-            //         eprintln!("wait error: {:#}", e);
-            //     }
-            // },
-            // Command::Stop{container_id}=>{
-            //     println!("work in progress")
-            // },
+            Command::Run{cont_id , program} =>{
+                let content = read_file(&cont_id).await.unwrap();
+                let data:ContainerConfig = serde_json::from_str(&content)?;
+                let pty = nix::pty::openpty(None, None)?;
+                let mut c = crate::container::Container::new(data.id);
+                Container::run(&mut c, &program, data.rootfs, Some(pty.slave)).await?;
+                let master_fd = pty.master.as_raw_fd();
+                std::mem::forget(pty.master);
+                let task1 = tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    loop {
+                        let n = buffered_reader.read(&mut buf).await?;
+                        if n == 0 { break; }
+                        nix::unistd::write(unsafe { BorrowedFd::borrow_raw(master_fd) }, &buf[..n])?;
+                    }
+                    Ok::<(), anyhow::Error>(())
+                });
+
+                let task2 = tokio::spawn(async move {
+                    let mut buf = [0u8; 1024];
+                    loop {
+                        let borrowed = unsafe { BorrowedFd::borrow_raw(master_fd) };
+                        match nix::unistd::read(borrowed, &mut buf) {
+                            Ok(0) => break,
+                            Ok(n) => { writer.write_all(&buf[..n]).await?; }
+                            Err(_) => break,
+                        }
+                    }
+                    Ok::<(), anyhow::Error>(())
+                });
+
+                tokio::select! {
+                    _ = task1 => {}
+                    _ = task2 => {}
+                }
+                let pid = match data.state {
+                    Running { pid } => pid,
+                    _ => return Err(anyhow::anyhow!("container not running")),
+                };
+                nix::sys::wait::waitpid( nix::unistd::Pid::from_raw(pid as i32), None)?;
+            },
+            Command::Stop{container_id}=>{
+                println!("work in progress")
+            },
             _ => {
                 println!("work in progress")
             }

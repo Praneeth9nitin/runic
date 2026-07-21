@@ -1,3 +1,5 @@
+use std::os::fd::AsRawFd;
+use std::os::unix::io::BorrowedFd;
 use tokio::net::UnixStream;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use clap:: {Parser, Subcommand};
@@ -29,7 +31,7 @@ enum Commands{
         interactive : bool
     },
     Run{
-        image : String,
+        cont_id : String,
         program : String
     },
     Ps,
@@ -50,7 +52,7 @@ async fn main()-> anyhow::Result<()>{
 
     let socket_path = format!("/tmp/runic.sock");
     let mut stream = UnixStream::connect(socket_path).await?;
-    let (mut reader , mut writer) = stream.split();
+    let (mut reader , mut writer) = stream.into_split();
     
     match args.command {
         Commands::Create { image } => {
@@ -62,9 +64,17 @@ async fn main()-> anyhow::Result<()>{
            json_payload.push('\n');
            writer.write_all(json_payload.as_bytes()).await?;
            writer.flush().await?;
+           let mut line = String::new();
+            reader.read_to_string(&mut line).await?;
+            let response: Response = serde_json::from_str(&line)?;
+            match response {
+                Response::Ok { message} => {
+                    print!("{}", message);
+                }
+                _ => {}
+            }
         }
         Commands::Start { cont_id, program } =>{
-            
             let req = Command::Start { cont_id, program };
             let mut json_payload = serde_json::to_string(&req)?;
             json_payload.push('\n');
@@ -94,14 +104,10 @@ async fn main()-> anyhow::Result<()>{
                 _ => {}
             }
         }
-        Commands::Run{image, program} =>{
-           let parts : Vec<&str> = image.trim().split(":").collect();
-           let image_name = format!("library/{}", parts[0]);
-           let tag = parts.get(1).unwrap_or(&"latest").to_string();
+        Commands::Run{cont_id, program} =>{
            let req = Command::Run {
-            image:image_name,
-            tag:tag,
-            program:program,
+            cont_id,
+            program
            };
 
            let mut json_payload = serde_json::to_string(&req)?;
@@ -109,6 +115,42 @@ async fn main()-> anyhow::Result<()>{
 
            writer.write_all(json_payload.as_bytes()).await?;
            writer.flush().await?;
+           let stdin_fd = std::io::stdin().as_raw_fd();
+           let borrowed = unsafe { BorrowedFd::borrow_raw(stdin_fd) };
+           let original = nix::sys::termios::tcgetattr(borrowed)?;
+           let mut raw = original.clone();
+           nix::sys::termios::cfmakeraw(&mut raw);
+           nix::sys::termios::tcsetattr(borrowed, nix::sys::termios::SetArg::TCSANOW, &raw)?;
+
+           let task1 : tokio::task::JoinHandle<anyhow::Result<()>> = tokio::spawn(async move{
+            let mut stdin = tokio::io::stdin();
+            let mut buf = [0u8; 1024];
+            loop{
+                let n = stdin.read(&mut buf).await?;
+                if n==0 {break;}
+                writer.write_all(&buf[..n]).await?;
+                writer.flush().await?;
+            }
+            Ok(())
+           });
+
+           let task2 : tokio::task::JoinHandle<anyhow::Result<()>> = tokio::spawn(async move{
+            let mut stdout = tokio::io::stdout();
+            let mut buf = [0u8; 1024];
+            loop{
+                let n = reader.read(&mut buf).await?;
+                if n == 0 { break; }
+                stdout.write_all(&buf[..n]).await?;
+                stdout.flush().await?;
+            }
+            Ok(())
+           });
+
+           tokio::select! {
+            _ = task1 =>{}
+            _ = task2 =>{}
+           }
+           nix::sys::termios::tcsetattr(borrowed, nix::sys::termios::SetArg::TCSANOW, &original)?;
         },
         _ => {println!("work in progress");}
     };

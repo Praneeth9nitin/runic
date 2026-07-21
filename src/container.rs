@@ -2,13 +2,14 @@ use crate::namespace::set_namespace;
 use crate::filesystem::set_filesystem;
 use std::fs::File;
 use std::io::Read;
-use nix::unistd::{ForkResult, Pid, close, dup2_stderr, dup2_stdin, dup2_stdout, execve, fork, pipe, read};
+use std::os::fd::{FromRawFd, OwnedFd};
+use nix::unistd::{ForkResult, close, execve, fork, pipe, read};
 use serde::{Deserialize, Serialize};
 use crate::newcgroup::{set_cgroup, add_to_cgroup};
 use crate::network::{set_network, container_network_configuration, add_container};
 use std::ffi::{CString};
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::process::Child;
+
 
 #[derive(Serialize, Deserialize)]
 pub enum ContainerState {
@@ -31,7 +32,7 @@ impl Container {
             child: None,
         }
     }
-    pub async fn run(&mut self, program: &str, rootfs_path: String, slave: OwnedFd) -> anyhow::Result<()> {
+    pub async fn run(&mut self, program: &str, rootfs_path: String, slave: Option<OwnedFd>) -> anyhow::Result<()> {
         let (read_fd, write_fd) = pipe()?;
         let (read_fd_1, write_fd_1) = pipe()?;
         let id = self.id.clone();
@@ -59,20 +60,22 @@ impl Container {
                 let updated = serde_json::to_string_pretty(&json_data)?;
                 std::fs::write(&file_path, updated)?;
                 self.state = ContainerState::Running { pid: child.as_raw() as u32 };
-    
-                nix::sys::wait::waitpid(child, None)?;
                 
-                let veth = format!("veth0_{}", self.id);
-                std::process::Command::new("ip")
-                    .args(["link", "delete", &veth])
-                    .output().ok();
-                let merged = format!("/tmp/runic/{}/merged", self.id);
-                std::process::Command::new("umount")
-                    .args(["-l", &merged])
-                    .output().ok();
-                std::fs::remove_dir_all(format!("/tmp/runic/{}", self.id)).ok();
             }
             Ok(ForkResult::Child) => {
+                if let Some(ref slave_result) = slave {
+                    nix::unistd::setsid()?;
+                    let mut stdin_fd = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(0) };
+                    let mut stdout_fd = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(1) };
+                    let mut stderr_fd = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(2) };
+                    nix::unistd::dup2(&slave_result, &mut stdin_fd)?;
+                    nix::unistd::dup2(&slave_result, &mut stdout_fd)?;
+                    nix::unistd::dup2(&slave_result, &mut stderr_fd)?;
+                    std::mem::forget(stdin_fd);
+                    std::mem::forget(stdout_fd);
+                    std::mem::forget(stderr_fd);
+                    println!("hello");
+                }
                 close(read_fd_1)?;
                 close(write_fd)?;
                 let mut buffer = [0u8; 32];
