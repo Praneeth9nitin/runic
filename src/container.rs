@@ -25,14 +25,14 @@ pub struct Container {
 }
 
 impl Container {
-    pub fn new(id: String) -> Self {
+    pub fn new(id: &str) -> Self {
         Container {
-            id: id,
+            id: id.to_string(),
             state: ContainerState::Created,
             child: None,
         }
     }
-    pub async fn run(&mut self, program: &str, rootfs_path: String, slave: Option<OwnedFd>) -> anyhow::Result<()> {
+    pub async fn run(&mut self, program: &str, rootfs_path: String, slave: Option<OwnedFd>, ip: String, hostname:String) -> anyhow::Result<()> {
         let (read_fd, write_fd) = pipe()?;
         let (read_fd_1, write_fd_1) = pipe()?;
         let id = self.id.clone();
@@ -49,8 +49,8 @@ impl Container {
                 let mut buffer = [0u8; 32];
                 read(read_fd_1, &mut buffer)?;
                 add_container(&self.id, child.as_raw()).await.expect("msg");
-                container_network_configuration(&self.id, child.as_raw()).await.expect("msg");
-                let file_path = format!("/tmp/runic/{}/config.json",&self.id);
+                container_network_configuration(&self.id, child.as_raw(), ip).await.expect("msg");
+                let file_path = format!("/tmp/runic/containers/{}/config.json",&self.id);
                 let mut file = File::open(&file_path)?;
                 let mut content = String::new();
                 file.read_to_string(&mut content)?;
@@ -80,7 +80,7 @@ impl Container {
                 close(write_fd)?;
                 let mut buffer = [0u8; 32];
                 read(read_fd, &mut buffer)?;
-                set_namespace()?;
+                set_namespace(hostname)?;
                 set_filesystem(&id, &rootfs)?;
                 let path = CString::new(program).unwrap();
                 let args = [CString::new("bash").unwrap()];

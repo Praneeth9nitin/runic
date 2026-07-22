@@ -69,7 +69,7 @@ async fn main()-> anyhow::Result<()>{
             let response: Response = serde_json::from_str(&line)?;
             match response {
                 Response::Ok { message} => {
-                    print!("{}", message);
+                    println!("{}", message);
                 }
                 _ => {}
             }
@@ -152,7 +152,101 @@ async fn main()-> anyhow::Result<()>{
            }
            nix::sys::termios::tcsetattr(borrowed, nix::sys::termios::SetArg::TCSANOW, &original)?;
         },
+
+        Commands::Ps => {
+            let req = Command::Ps;
+            let mut json = serde_json::to_string(&req)?;
+            json.push('\n');
+            writer.write_all(json.as_bytes()).await?;
+            writer.flush().await?;
+
+            let mut line = String::new();
+            reader.read_to_string(&mut line).await?;
+            let response: Response = serde_json::from_str(&line)?;
+            
+            match response {
+                Response::ContainerList { containers } => {
+                    println!("{:<12} {:<20} {:<10} {}", "ID", "IMAGE", "STATUS", "PID");
+                    println!("{}", "-".repeat(55));
+                    for c in containers {
+                        println!("{:<12} {:<20} {:<10} {}", c.id, c.image, c.status, c.pid);
+                    }
+                }
+                Response::Error { message } => {
+                    eprintln!("error: {}", message);
+                }
+                _ => {}
+            }
+        }
+        Commands::Stop { id } => {
+            let res = Command::Stop { container_id: id };
+            let mut json = serde_json::to_string(&res)?;
+            json.push('\n');
+            writer.write_all(json.as_bytes()).await?;
+            writer.flush().await?;
+            let mut line = String::new();
+            reader.read_to_string(&mut line).await?;
+            let response: Response = serde_json::from_str(&line)?;
+
+            match response{
+                Response::Ok { message }=>{
+                    println!("{}",message);
+                }
+                _=>{}
+            }
+        }
+        Commands::Rm { id } => {
+            let res = Command::Rm { container_id: id };
+            let mut json = serde_json::to_string(&res)?;
+            json.push('\n');
+            writer.write_all(json.as_bytes()).await?;
+            writer.flush().await?;
+            let mut line = String::new();
+            reader.read_to_string(&mut line).await?;
+            let response: Response = serde_json::from_str(&line)?;
+
+            match response{
+                Response::Ok { message }=>{
+                    println!("{}",message);
+                }
+                _=>{}
+            }
+        }
+        Commands::Images => {
+            let res = Command::Images;
+            let mut json = serde_json::to_string(&res)?;
+            json.push('\n');
+            writer.write_all(json.as_bytes()).await?;
+            writer.flush().await?;
+            let mut line = String::new();
+            reader.read_to_string(&mut line).await?;
+            let response: Response = serde_json::from_str(&line)?;
+
+            match response{
+                Response::ImageList { images }=>{
+                    println!("{:<12} {:<20} {:<10}", "IMAGE", "TAG", "SIZE");
+                    println!("{}", "-".repeat(55));
+                    for image in images{
+                        let size = format_size(image.size);
+                        println!("{:<12} {:<20} {:<10} ", image.name, image.tag, size);
+                    }
+                }
+                _=>{}
+            }
+        }
         _ => {println!("work in progress");}
     };
     Ok(())
+}
+
+pub fn format_size(bytes: u64) -> String {
+    if bytes >= 1_000_000_000 {
+        format!("{:.1}GB", bytes as f64 / 1_000_000_000.0)
+    } else if bytes >= 1_000_000 {
+        format!("{:.1}MB", bytes as f64 / 1_000_000.0)
+    } else if bytes >= 1_000 {
+        format!("{:.1}KB", bytes as f64 / 1_000.0)
+    } else {
+        format!("{}B", bytes)
+    }
 }

@@ -1,4 +1,4 @@
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd};
 use uuid::Uuid;
 use tokio::fs::File;
 use tokio::net::{UnixListener, UnixStream};
@@ -8,11 +8,13 @@ use crate::container::{
     Container
 };
 use crate::daemon::store::ContainerConfig;
-use crate::proto::{Command, Response};
+use crate::proto::{Command, ContainerInfo, ImageInfo, Response};
 use std::os::unix::io::BorrowedFd;
+use walkdir::WalkDir;
+use sysinfo::{ProcessRefreshKind, RefreshKind, System, Pid};
 
 pub fn get_file(cont_id:&str)->String{
-    format!("/tmp/runic/{}/config.json",cont_id)
+    format!("/tmp/runic/containers/{}/config.json",cont_id)
 }
 
 pub async fn read_file(cont_id:&str)->anyhow::Result<String>{
@@ -23,17 +25,45 @@ pub async fn read_file(cont_id:&str)->anyhow::Result<String>{
     Ok(content)
 }
 
-pub async fn end(pid: String) -> anyhow::Result<()>{
-    let veth = format!("veth0_{}", pid);
+pub async fn end(cont_id: &str) -> anyhow::Result<()>{
+    let veth = format!("veth0_{}", cont_id);
     std::process::Command::new("ip")
         .args(["link", "delete", &veth])
         .output().ok();
-    let merged = format!("/tmp/runic/{}/merged", pid);
+    let merged = format!("/tmp/runic/containers/{}/merged", cont_id);
     std::process::Command::new("umount")
         .args(["-l", &merged])
         .output().ok();
-    std::fs::remove_dir_all(format!("/tmp/runic/{}", pid)).ok();
+    std::fs::remove_dir_all(format!("/tmp/runic/containers/{}", cont_id)).ok();
     Ok(())
+}
+
+pub async fn kill_process_by_pid(pid_num: u32) {
+    let sys = System::new_with_specifics(
+        RefreshKind::everything().with_processes(ProcessRefreshKind::everything())
+    );
+
+    let target_pid = Pid::from(pid_num as usize);
+
+    if let Some(process) = sys.process(target_pid) {
+        println!("Found process: {}. Stopping it...", process.name().to_string_lossy());
+        process.kill();
+    } else {
+        println!("No running process found with PID: {}", pid_num);
+    }
+}
+
+pub fn allocate_ip()-> anyhow::Result<String>{
+    let counter_path = "/tmp/runic/ip_counter";
+
+    let counter: u8 = std::fs::read_to_string(counter_path)
+        .unwrap_or("2".to_string())
+        .trim()
+        .parse()
+        .unwrap_or(2);
+    std::fs::write(counter_path, (counter + 1).to_string())?;
+
+    Ok(format!("10.0.0.{}", counter))
 }
 
 pub async fn start() -> anyhow::Result<()> {
@@ -50,8 +80,17 @@ pub async fn start() -> anyhow::Result<()> {
     }
 }
 
-async fn handle_connection(mut stream: UnixStream)->anyhow::Result<()>{
-    let (mut reader, mut writer) = stream.into_split();
+pub fn get_dir_size(path: &str) -> u64 {
+    WalkDir::new(path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum()
+}
+
+async fn handle_connection(stream: UnixStream)->anyhow::Result<()>{
+    let (reader, mut writer) = stream.into_split();
     let mut buffered_reader = BufReader::new(reader);
     let mut line = String::new();
 
@@ -60,16 +99,18 @@ async fn handle_connection(mut stream: UnixStream)->anyhow::Result<()>{
 
         let response = match request{
             Command::Create { image, tag } =>{
+                let tag1 = tag.clone();
                 let rootfs_path = crate::image::pull(&image, &tag).await.unwrap();
                 let id = format!("{}",Uuid::new_v4())[..8].to_string();
-                let cont_data = ContainerConfig{id:id, image:image, tag:tag, state:Created, rootfs:rootfs_path};
-                let file_path = format!("/tmp/runic/{}/",cont_data.id);
-                std::fs::create_dir(&file_path)?;
+                let image = ImageInfo{name:image, tag:tag, size:get_dir_size(&rootfs_path)};
+                let cont_data = ContainerConfig{id:id, image:image, tag:tag1, state:Created, rootfs:rootfs_path, ip:allocate_ip().unwrap()};
+                let file_path = format!("/tmp/runic/containers/{}/",cont_data.id);
+                std::fs::create_dir_all(&file_path).expect("msg");
                 let write_file = File::create(format!("{}/config.json",&file_path)).await?;
-                let mut writer = BufWriter::new(write_file);
+                let mut buff_writer = BufWriter::new(write_file);
                 let json_string = serde_json::to_string_pretty(&cont_data)?;
-                writer.write_all(json_string.as_bytes()).await?;
-                writer.flush().await?;
+                buff_writer.write_all(json_string.as_bytes()).await?;
+                buff_writer.flush().await?;
                 let send_data = format!("container id {}", cont_data.id);
                 let res = Response::Ok { message:send_data};
                 let mut json_data = serde_json::to_string(&res)?;
@@ -80,7 +121,13 @@ async fn handle_connection(mut stream: UnixStream)->anyhow::Result<()>{
             Command::Start { cont_id, program } =>{
                 let content = read_file(&cont_id).await.unwrap();
                 let data:ContainerConfig = serde_json::from_str(&content)?;
-                let mut c = crate::container::Container::new(data.id);
+                let mut c = crate::container::Container::new(&data.id);
+                Container::run(&mut c, &program, data.rootfs, None, data.ip, data.id).await?;
+                let pid = match data.state {
+                    Running { pid } => pid,
+                    _ => return Err(anyhow::anyhow!("container not running")),
+                };
+                nix::sys::wait::waitpid( nix::unistd::Pid::from_raw(pid as i32), None)?;
             }
             Command::Exec { cont_id, command, interactive } =>{
                 let content = read_file(&cont_id).await.unwrap();
@@ -98,24 +145,19 @@ async fn handle_connection(mut stream: UnixStream)->anyhow::Result<()>{
                     .stderr(std::process::Stdio::piped())
                     .output()?;
                 println!("running nsenter for pid: {}", pid);
-                println!("command: {}", command);
-                println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
-                println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
 
                 let res = Response::ExecOutput { stdout: String::from_utf8_lossy(&output.stdout).to_string(), stderr: String::from_utf8_lossy(&output.stderr).to_string() };
                 let mut json_data = serde_json::to_string(&res)?;
                 json_data.push('\n');
                 writer.write_all(json_data.as_bytes()).await?;
                 writer.flush().await?;
-                nix::sys::wait::waitpid( nix::unistd::Pid::from_raw(pid as i32), None)?;
-                
             }
             Command::Run{cont_id , program} =>{
                 let content = read_file(&cont_id).await.unwrap();
                 let data:ContainerConfig = serde_json::from_str(&content)?;
                 let pty = nix::pty::openpty(None, None)?;
-                let mut c = crate::container::Container::new(data.id);
-                Container::run(&mut c, &program, data.rootfs, Some(pty.slave)).await?;
+                let mut c = crate::container::Container::new(&data.id);
+                Container::run(&mut c, &program, data.rootfs, Some(pty.slave), data.ip, data.id).await?;
                 let master_fd = pty.master.as_raw_fd();
                 std::mem::forget(pty.master);
                 let task1 = tokio::spawn(async move {
@@ -151,9 +193,107 @@ async fn handle_connection(mut stream: UnixStream)->anyhow::Result<()>{
                 };
                 nix::sys::wait::waitpid( nix::unistd::Pid::from_raw(pid as i32), None)?;
             },
-            Command::Stop{container_id}=>{
-                println!("work in progress")
+            Command::Ps=>{
+                let mut containers: Vec<ContainerInfo> = Vec::new();
+                let entries : Vec<_> = WalkDir::new("/tmp/runic/containers/")
+                    .min_depth(1)
+                    .max_depth(1)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.into_path())
+                    .collect();
+                for path in entries{
+                    let file_name = format!("{}/config.json", path.to_string_lossy());
+                    let file = File::open(file_name).await.expect("file not found");
+                    let mut string_reader = BufReader::new(file);
+                    let mut content = String::new();
+                    string_reader.read_to_string(&mut content).await?;
+                    let data:ContainerConfig = serde_json::from_str(&content)?;
+                    let mut some_pid = 0;
+                    let status = match data.state{
+                        Running { pid } => {
+                            some_pid = pid;
+                            "running"
+                        },
+                        Created =>{
+                            "created"
+                        },
+                        _ => return Err(anyhow::anyhow!("no container")),
+                    };
+                    let entry = ContainerInfo{id:data.id, image:data.image.name, status:status.to_string(), pid:some_pid};
+                    containers.push(entry);
+                }
+                let response = Response::ContainerList { containers };
+                let mut json = serde_json::to_string(&response)?;
+                json.push('\n');
+                writer.write_all(json.as_bytes()).await?;
+                writer.flush().await?;
             },
+            Command::Stop { container_id } =>{
+                let file_path = get_file(&container_id);
+                let mut file = File::open(&file_path).await?;
+                let mut content = String::new();
+                file.read_to_string(&mut content).await?;
+                let data:ContainerConfig = serde_json::from_str(&content)?;
+                let pid = match data.state{
+                    Running{pid}=>{
+                        pid
+                    }
+                    _=> return Err(anyhow::anyhow!("container not running")),
+                };
+                let mut json_data: serde_json::Value = serde_json::from_str(&content)?;
+                json_data["state"] = serde_json::to_value(Created)?;
+
+                let updated = serde_json::to_string_pretty(&json_data)?;
+                std::fs::write(&file_path, updated)?;
+                kill_process_by_pid(pid).await;
+                let msg = format!("process {} deleted",pid);
+                let res = Response::Ok { message: msg };
+                let mut json_data = serde_json::to_string(&res)?;
+                json_data.push('\n');
+                writer.write_all(json_data.as_bytes()).await?;
+                writer.flush().await?;
+            }
+            Command::Rm { container_id } =>{
+                end(&container_id).await?;
+                let msg = format!("container {} removed",container_id);
+                let res = Response::Ok { message: msg };
+                let mut json_data = serde_json::to_string(&res)?;
+                json_data.push('\n');
+                writer.write_all(json_data.as_bytes()).await?;
+                writer.flush().await?;
+            }
+            Command::Images =>{
+                let mut images: Vec<ImageInfo> = Vec::new();
+                let image_list : Vec<_> = WalkDir::new("/tmp/runic/rootfs/")
+                    .min_depth(1)
+                    .max_depth(1)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.into_path())
+                    .collect();
+                for image in image_list{
+                    let size = get_dir_size(&image.to_string_lossy());
+                    let tag: Vec<_> = WalkDir::new(&image)
+                        .min_depth(1)
+                        .max_depth(1)
+                        .into_iter()
+                        .filter_map(|e| e.ok())
+                        .map(|e| e.into_path())
+                        .collect();
+                    let image_path_str = image.display().to_string();
+                    let name_parts: Vec<&str> = image_path_str.split("/").collect();
+                    let tag_str = tag[0].display().to_string();
+                    let tag_slice: Vec<&str> = tag_str.split("/").collect();
+                    let value = ImageInfo{name: name_parts[4].to_string()[8..].to_string(), tag:tag_slice[5].to_string(), size};
+                    images.push(value);
+                }
+                let res = Response::ImageList { images };
+                let mut json_data = serde_json::to_string(&res)?;
+                json_data.push('\n');
+                writer.write_all(json_data.as_bytes()).await?;
+                writer.flush().await?;
+            }
             _ => {
                 println!("work in progress")
             }

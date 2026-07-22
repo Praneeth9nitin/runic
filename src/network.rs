@@ -139,16 +139,17 @@ pub async fn add_container(container_id: &str, child_pid: i32) -> anyhow::Result
     Ok(())
 }
 
-pub async fn container_network_configuration(container_id: &str, child_pid: i32) -> anyhow::Result<()>{
+pub async fn container_network_configuration(container_id: &str, child_pid: i32, ip_for_child:String) -> anyhow::Result<()>{
     let veth2 = format!("veth1_{}", container_id);
     let pid_str = child_pid.to_string();
+    let ip = format!("{}/24", ip_for_child);
 
     std::process::Command::new("sudo")
     .args(["nsenter" ,"--target", &pid_str, "--net", "ip", "addr", "flush", "dev", &veth2])
     .output()?;
 
     let out = std::process::Command::new("sudo")
-        .args(["nsenter", "--target", &pid_str, "--net", "ip", "addr", "add", "10.0.0.2/24", "dev", &veth2])
+        .args(["nsenter", "--target", &pid_str, "--net", "ip", "addr", "add", &ip, "dev", &veth2])
         .output()?;
 
     if !out.status.success() {
