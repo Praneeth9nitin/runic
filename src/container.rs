@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::newcgroup::{set_cgroup, add_to_cgroup};
 use crate::network::{set_network, container_network_configuration, add_container};
 use std::ffi::{CString};
+use crate::security::{apply_seccomp, drop_capabilities};
 use std::process::Child;
 
 
@@ -74,7 +75,6 @@ impl Container {
                     std::mem::forget(stdin_fd);
                     std::mem::forget(stdout_fd);
                     std::mem::forget(stderr_fd);
-                    println!("hello");
                 }
                 close(read_fd_1)?;
                 close(write_fd)?;
@@ -82,6 +82,8 @@ impl Container {
                 read(read_fd, &mut buffer)?;
                 set_namespace(hostname)?;
                 set_filesystem(&id, &rootfs)?;
+                drop_capabilities()?;
+                apply_seccomp()?;
                 let path = CString::new(program).unwrap();
                 let args = [CString::new("bash").unwrap()];
                 let env = vec![

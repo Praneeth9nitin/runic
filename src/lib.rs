@@ -6,3 +6,4 @@ pub mod namespace;
 pub mod network;
 pub mod filesystem;
 pub mod newcgroup;
+pub mod security;
