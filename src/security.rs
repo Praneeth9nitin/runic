@@ -2,43 +2,80 @@ use libseccomp::{ScmpAction, ScmpFilterContext, ScmpSyscall, ScmpArch};
 use caps::{CapSet, Capability};
 
 pub fn apply_seccomp() -> anyhow::Result<()>{
-    let mut filter = ScmpFilterContext::new(ScmpAction::KillProcess)?;
+    let mut filter = ScmpFilterContext::new(ScmpAction::Errno(1))?;
+    println!("process killed");
     filter.add_arch(ScmpArch::X8664)?;
-     let sys_call = [
+    let sys_call = [
         // File ops
         "read", "write", "open", "close", "stat", "fstat", "lstat",
         "openat", "readv", "writev", "pread64", "pwrite64",
+        "access", "lseek", "fstatfs", "statx", "getdents64",
+        "fcntl", "dup", "dup2", "pipe", "getcwd", "chdir",
+        "newfstatat", "readlink", "readlinkat",  // ← critical for dynamic linker
+
         // Process
-        "fork", "clone", "execve", "exit", "exit_group", "wait4",
-        "getpid", "getppid", "gettid",
+        "fork", "clone", "clone3", "execve", "exit", "exit_group",
+        "wait4", "waitid",
+        "getpid", "getppid", "gettid", "geteuid", "getuid",
+        "getegid", "getgid", "getgroups", "getsid",
+        "setgroups", "setresgid", "setresuid",  // ← user/group management
+
         // Memory
-        "mmap", "mprotect", "munmap", "brk", "mremap",
+        "mmap", "mprotect", "munmap", "brk", "mremap", "madvise",
+
         // Network
-        "socket", "connect", "accept", "bind", "listen",
-        "send", "recv", "sendto", "recvfrom",
+        "socket", "connect", "accept", "accept4", "bind", "listen",
+        "send", "recv", "sendto", "recvfrom", "sendmsg", "recvmsg",
+        "getsockopt", "setsockopt", "getsockname", "getpeername",
+        "shutdown", "socketpair",
+
         // Signals
-        "rt_sigaction", "rt_sigprocmask", "rt_sigreturn", "kill", "tgkill",
+        "rt_sigaction", "rt_sigprocmask", "rt_sigreturn",
+        "kill", "tgkill", "sigaltstack",
+
         // Time
         "clock_gettime", "gettimeofday", "nanosleep",
+        "timerfd_create", "timerfd_settime", "timerfd_gettime",
+
+        // Thread/sync
+        "futex", "set_tid_address", "set_robust_list", "get_robust_list",
+        "sched_getaffinity",
+
+        // Epoll
+        "epoll_create1", "epoll_ctl", "epoll_wait", "epoll_pwait2",
+
+        // System
+        "arch_prctl", "prctl", "uname", "getrandom",
+        "prlimit64", "rseq", "sysinfo",
+
         // Misc
-        "ioctl", "fcntl", "dup", "dup2", "pipe", "getcwd", "chdir", "getdents64",
-        "futex",           // thread synchronization — bash needs this
-        "set_tid_address", // thread setup
-        "set_robust_list", // thread setup
-        "arch_prctl",      // thread-local storage
-        "access",          // file permission checks
-        "newfstatat",      // modern stat variant
-        "getuid", "getgid", "geteuid", "getegid",  // user/group IDs
-        "uname",           // system info
-        "sysinfo",         // system statistics
-        "prctl",           // process control
-        "capget", "capset", // capabilities
-        "sigaltstack",     // signal stack
-        "madvise",         // memory hints
-        "poll", "select",  // I/O multiplexing
-        "lseek",           // file seeking
-        "unlink", "mkdir", "rmdir", "rename", // filesystem ops
-        "chmod", "chown",  // permission changes
+        "ioctl", "poll", "ppoll", "select", "pselect6",
+        "fsync", "fdatasync",
+        "dup3", "pipe2",
+        "setns", "unshare",
+
+        // Resource limits
+        "getrlimit", "setrlimit",
+        "getrusage",
+
+        // File management
+        "unlink", "unlinkat", "mkdir", "mkdirat",
+        "rmdir", "rename", "renameat", "renameat2",
+        "chmod", "fchmod", "chown", "fchown", "lchown",
+        "symlink", "symlinkat", "link", "linkat",
+        "umask", "truncate", "ftruncate",
+
+        // Misc system
+        "memfd_create", "eventfd2", "signalfd4",
+        "copy_file_range", "sendfile",
+        "capget", "capset",
+        "chroot", "pivot_root",
+        "mount", "umount2",
+        "sync", "syncfs",
+        "getpgrp",
+        "getpgid", 
+        "setpgid",
+        "setsid",
     ];
 
     for i in sys_call{

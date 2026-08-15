@@ -48,7 +48,9 @@ impl Container {
                 add_to_cgroup(&self.id, child.as_raw())?;
                 close(write_fd)?;
                 let mut buffer = [0u8; 32];
+                println!("parent is waiting for signal");
                 read(read_fd_1, &mut buffer)?;
+                println!("parent got the signal");
                 add_container(&self.id, child.as_raw()).await.expect("msg");
                 container_network_configuration(&self.id, child.as_raw(), ip).await.expect("msg");
                 let file_path = format!("/tmp/runic/containers/{}/config.json",&self.id);
@@ -91,8 +93,9 @@ impl Container {
                     CString::new("HOME=/root").unwrap(),
                     CString::new("TERM=xterm").unwrap(),
                     ];
-                    
+                println!("child about to signal");
                 close(write_fd_1)?;
+                println!("child signaled");
                 execve(&path, &args, &env)?;
             }
             Err(_) => {println!("fork failed");}

@@ -3,12 +3,6 @@ use std::fs::create_dir_all;
 use nix::unistd::pivot_root;
 
 pub fn set_filesystem(container_id: &str, rootfs_path: &str) -> anyhow::Result<()>{
-    if !std::path::Path::new("/tmp/runic/base/bin").exists() {
-        std::fs::create_dir_all("/tmp/runic/base")?;
-        std::process::Command::new("cp")
-            .args(["-a", "/home/ubuntu/runic-base/.", "/tmp/runic/base/"])
-            .status()?;
-    }
     mount(None::<&str>, "/", None::<&str>, MsFlags::MS_PRIVATE | MsFlags::MS_REC, None::<&str>)?;
     println!("private mount done");
     create_dir_all(format!("/tmp/runic/{}/upper", container_id))?;

@@ -157,9 +157,14 @@ async fn handle_connection(stream: UnixStream)->anyhow::Result<()>{
                 let data:ContainerConfig = serde_json::from_str(&content)?;
                 let pty = nix::pty::openpty(None, None)?;
                 let mut c = crate::container::Container::new(&data.id);
-                Container::run(&mut c, &program, data.rootfs, Some(pty.slave), data.ip, data.id).await?;
+                tokio::spawn(async move{
+                    Container::run(&mut c, &program, data.rootfs, Some(pty.slave), data.ip, data.id).await
+                    .unwrap_or_else(|e| eprintln!("container error: {}", e));
+                });
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 let master_fd = pty.master.as_raw_fd();
                 std::mem::forget(pty.master);
+                eprintln!("runicd: starting PTY forwarding");
                 let task1 = tokio::spawn(async move {
                     let mut buf = [0u8; 1024];
                     loop {
